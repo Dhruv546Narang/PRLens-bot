@@ -43,14 +43,20 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 
     logger.info(f"Webhook: {event_type}/{action}")
 
-    # Only review on PR opened or new commits pushed
+    # Review on PR opened or new commits pushed to PR
     if event_type == "pull_request" and action in ("opened", "synchronize"):
         pr = data.get("pull_request", {})
         logger.info(
             f"Queuing review: PR #{pr.get('number')} "
             f"'{pr.get('title', '')}' by @{pr.get('user', {}).get('login', '?')}"
         )
-        background_tasks.add_task(reviewer.run_review, data)
+        background_tasks.add_task(reviewer.run_review, data, "pull_request")
+        return {"status": "review_queued"}
+
+    # Review on direct push to a branch (for solo devs)
+    if event_type == "push":
+        logger.info("Queuing review for direct push")
+        background_tasks.add_task(reviewer.run_review, data, "push")
         return {"status": "review_queued"}
 
     return {"status": "ignored", "event": event_type, "action": action}

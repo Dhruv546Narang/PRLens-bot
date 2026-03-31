@@ -89,6 +89,24 @@ def fetch_pr_diff(repo: str, pr_num: int, token: str) -> str:
     return resp.text
 
 
+def fetch_commit_diff(repo: str, commit_sha: str, token: str) -> str:
+    """Fetch the raw unified diff for a single commit."""
+    resp = requests.get(
+        f"https://api.github.com/repos/{repo}/commits/{commit_sha}",
+        headers=_headers(token, accept="application/vnd.github.v3.diff"),
+    )
+    resp.raise_for_status()
+    return resp.text
+
+
+def post_commit_comment(repo: str, commit_sha: str, token: str, body: str) -> None:
+    """Post a generic comment on a specific commit."""
+    url = f"https://api.github.com/repos/{repo}/commits/{commit_sha}/comments"
+    resp = requests.post(url, headers=_headers(token), json={"body": body})
+    resp.raise_for_status()
+    logger.info(f"Commit comment posted: {resp.status_code}")
+
+
 def post_review(
     repo: str,
     pr_num: int,

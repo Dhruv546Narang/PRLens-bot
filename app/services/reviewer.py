@@ -213,20 +213,44 @@ def build_inline_comments(file_reviews: list[dict]) -> list[dict]:
 #  Main Review Pipeline
 # ──────────────────────────────────────────────────────────
 
-def run_review(data: dict) -> None:
+def run_review(data: dict, event_type: str = "pull_request") -> None:
     """Orchestrate the full review: fetch diff → LLM review → post to GitHub.
 
     Called as a FastAPI background task.
     """
     repo = data["repository"]["full_name"]
-    pr_num = data["pull_request"]["number"]
     inst_id = data["installation"]["id"]
-    pr_title = data["pull_request"].get("title", "")
-    pr_author = data["pull_request"].get("user", {}).get("login", "unknown")
+    
+    pr_num = None
+    commit_sha = None
 
-    logger.info(f"{'='*60}")
-    logger.info(f"PR #{pr_num}: '{pr_title}' by @{pr_author} in {repo}")
-    logger.info(f"{'='*60}")
+    if event_type == "pull_request":
+        pr_num = data["pull_request"]["number"]
+        pr_title = data["pull_request"].get("title", "")
+        pr_author = data["pull_request"].get("user", {}).get("login", "unknown")
+
+        logger.info(f"{'='*60}")
+        logger.info(f"PR #{pr_num}: '{pr_title}' by @{pr_author} in {repo}")
+        logger.info(f"{'='*60}")
+    else:
+        # Push event handling
+        commits = data.get("commits", [])
+        if not commits:
+            logger.info("Push event with no commits, skipping.")
+            return
+
+        head_commit = data.get("head_commit")
+        if not head_commit:
+            logger.info("No head commit found, skipping.")
+            return
+            
+        commit_sha = head_commit["id"]
+        commit_msg = head_commit.get("message", "").split("\n")[0]
+        commit_author = head_commit.get("author", {}).get("username", "unknown")
+        
+        logger.info(f"{'='*60}")
+        logger.info(f"Commit {commit_sha[:7]}: '{commit_msg}' by @{commit_author} in {repo}")
+        logger.info(f"{'='*60}")
 
     # ── 1. Authenticate ──
     try:
@@ -238,23 +262,29 @@ def run_review(data: dict) -> None:
 
     # ── 2. Fetch diff ──
     try:
-        raw_diff = github.fetch_pr_diff(repo, pr_num, token)
+        if event_type == "pull_request":
+            raw_diff = github.fetch_pr_diff(repo, pr_num, token)
+        else:
+            raw_diff = github.fetch_commit_diff(repo, commit_sha, token)
         logger.info(f"Fetched diff: {len(raw_diff):,} characters")
     except Exception as e:
         logger.error(f"Failed to fetch diff: {e}")
         return
 
-    # ── 3. Guard: refuse massive PRs ──
+    # ── 3. Guard: refuse massive PRs/Commits ──
     if len(raw_diff) > MAX_DIFF_CHARS:
         logger.warning(f"Diff too large: {len(raw_diff):,} chars (limit: {MAX_DIFF_CHARS:,})")
-        github.post_review(
-            repo, pr_num, token,
+        msg = (
             "# 🔍 PRLens Code Review\n\n"
-            f"**⚠️ This PR is too large to review** ({len(raw_diff):,} characters).\n\n"
-            "Large PRs are harder to review, easier to hide bugs in, and slower to merge. "
-            "Break this into smaller, focused PRs.\n\n"
+            f"**⚠️ This code change is too large to review** ({len(raw_diff):,} characters).\n\n"
+            "Large changes are harder to review, easier to hide bugs in, and slower to merge. "
+            "Break this into smaller, focused changes.\n\n"
             "---\n*Powered by PRLens*"
         )
+        if event_type == "pull_request":
+            github.post_review(repo, pr_num, token, msg)
+        else:
+            github.post_commit_comment(repo, commit_sha, token, msg)
         return
 
     # ── 4. Parse & filter diffs ──
@@ -264,13 +294,16 @@ def run_review(data: dict) -> None:
 
     if not filtered_diffs:
         logger.info("No reviewable files found")
-        github.post_review(
-            repo, pr_num, token,
+        msg = (
             "# 🔍 PRLens Code Review\n\n"
-            "No reviewable source files in this PR "
+            "No reviewable source files found "
             "(all files are lock files, binaries, or generated code).\n\n"
             "---\n*Powered by PRLens*"
         )
+        if event_type == "pull_request":
+            github.post_review(repo, pr_num, token, msg)
+        else:
+            github.post_commit_comment(repo, commit_sha, token, msg)
         return
 
     logger.info(
@@ -306,14 +339,17 @@ def run_review(data: dict) -> None:
     # ── 6. Handle total failure ──
     if not file_reviews:
         logger.error("All file reviews failed")
-        github.post_review(
-            repo, pr_num, token,
+        msg = (
             "# 🔍 PRLens Code Review\n\n"
-            "**⚠️ Review failed** — could not analyze any files in this PR. "
+            "**⚠️ Review failed** — could not analyze any files. "
             "This is likely a temporary issue with the AI service. "
-            "Push another commit to trigger a re-review.\n\n"
+            "Push another change to trigger a re-review.\n\n"
             "---\n*Powered by PRLens*"
         )
+        if event_type == "pull_request":
+            github.post_review(repo, pr_num, token, msg)
+        else:
+            github.post_commit_comment(repo, commit_sha, token, msg)
         return
 
     # ── 7. Format & post ──
@@ -334,7 +370,22 @@ def run_review(data: dict) -> None:
     )
 
     try:
-        github.post_review(repo, pr_num, token, body, inline_comments, event)
-        logger.info(f"✅ Review posted for PR #{pr_num} in {repo}")
+        if event_type == "pull_request":
+            github.post_review(repo, pr_num, token, body, inline_comments, event)
+            logger.info(f"✅ Review posted for PR #{pr_num} in {repo}")
+        else:
+            # Pushes don't support PR-style inline comments directly here,
+            # so we append the simulated inline issues directly to the body.
+            if inline_comments:
+                body += "\n\n### 📌 Inline Findings (From Direct Push)\n\n"
+                for c in inline_comments:
+                    path = c.get("path", "?")
+                    line = c.get("line", "?")
+                    issue_body = c.get("body", "")
+                    body += f"**`{path}:{line}`**\n\n{issue_body}\n\n---\n"
+                    
+            github.post_commit_comment(repo, commit_sha, token, body)
+            logger.info(f"✅ Review posted for commit {commit_sha[:7]} in {repo}")
+            
     except Exception as e:
         logger.error(f"Failed to post review: {e}")
