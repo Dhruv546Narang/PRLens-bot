@@ -7,11 +7,11 @@ Built with **FastAPI**, **GitHub Apps API**, and **Claude Sonnet 4** via OpenRou
 ---
 
 ## What It Does
-When someone opens or updates a Pull Request, PRLens:
+When someone opens a **Pull Request** or **pushes code directly** to a branch, PRLens:
 1. Skips lock files, binaries, and generated code to save tokens.
 2. Slices the code changes (the "diff") line by line.
 3. Analyzes it aggressively for **Security**, **Bugs**, **Performance**, **Architecture**, **Quality**, and **Error Handling**.
-4. Posts brutally honest, inline comments directly on the exact lines of code on GitHub.
+4. Posts brutally honest, inline comments directly on the PR, or a massive commit comment for direct pushes.
 5. If the issues are severe, it blocks the PR with a `REQUEST_CHANGES` review.
 
 ## Tech Stack
@@ -29,7 +29,7 @@ When someone opens or updates a Pull Request, PRLens:
 - A registered [GitHub App](https://docs.github.com/en/apps/creating-github-apps) with the following permissions:
   - **Pull requests**: Read & write
   - **Contents**: Read-only
-  - **Events to subscribe to**: Pull request
+  - **Events to subscribe to**: Pull request, Push
 
 ### 2. Installation
 Clone the repo and install the required dependencies:
