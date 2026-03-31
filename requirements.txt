@@ -1,0 +1,16 @@
+# Core
+fastapi>=0.115.0
+uvicorn>=0.34.0
+
+# GitHub App auth
+PyJWT>=2.9.0
+cryptography>=44.0.0
+
+# HTTP
+requests>=2.32.0
+
+# LLM (OpenRouter uses OpenAI-compatible API)
+openai>=1.60.0
+
+# Config
+python-dotenv>=1.0.0
